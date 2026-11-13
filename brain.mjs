@@ -24,19 +24,23 @@ const INTENTS = ["play_music", "navigate", "unknown"];
 
 const SYSTEM =
   "You turn a Malaysian rojak voice command (mixed Mandarin, English and Malay, " +
-  "with local slang, often starting with the wake word 'nothing') into one action. " +
-  'Reply with ONLY compact JSON: {"intent": <one of ' + JSON.stringify(INTENTS) +
-  '>, "query": <the cleaned target>}. Use "unknown" if nothing fits. Clean the ' +
+  "with local slang, often starting with the wake word 'nothing') into actions. " +
+  "One command may hold several actions; keep them in the spoken order. " +
+  'Reply with ONLY compact JSON: {"actions":[{"intent": <one of ' + JSON.stringify(INTENTS) +
+  '>, "query": <the cleaned target>}, ...]}. Use "unknown" if nothing fits. Clean the ' +
   "query into its standard form (the real song, artist or place name), not the raw " +
-  'speech. Examples: "nothing帮我开下周杰伦的搁浅" -> {"intent":"play_music",' +
-  '"query":"搁浅 周杰伦"}; "nothing去map search下回家的路" -> ' +
-  '{"intent":"navigate","query":"home"}.';
+  'speech. Going home is always the query "home". Examples: "nothing帮我开下周杰伦的搁浅" -> ' +
+  '{"actions":[{"intent":"play_music","query":"搁浅 周杰伦"}]}; ' +
+  '"nothing去map search下回家的路" -> {"actions":[{"intent":"navigate","query":"home"}]}; ' +
+  '"nothing go KLCC then play some Jay Chou" -> {"actions":[{"intent":"navigate","query":"KLCC"},' +
+  '{"intent":"play_music","query":"周杰伦"}]}.';
 
 function coerce(out, text) {
-  // Model output is untrusted. Keep only a valid intent + query, else unknown.
-  const ok = out && typeof out === "object" &&
-    INTENTS.includes(out.intent) && typeof out.query === "string";
-  return ok ? { intent: out.intent, query: out.query } : { intent: "unknown", query: text.trim() };
+  // Model output is untrusted. Keep only valid {intent, query} items, else one unknown.
+  const actions = (Array.isArray(out?.actions) ? out.actions : [])
+    .filter((a) => a && INTENTS.includes(a.intent) && typeof a.query === "string")
+    .map((a) => ({ intent: a.intent, query: a.query }));
+  return { actions: actions.length ? actions : [{ intent: "unknown", query: text.trim() }] };
 }
 
 async function parse(text) {
@@ -57,7 +61,7 @@ async function parse(text) {
     }
     return coerce(JSON.parse(raw.trim()), text);
   } catch (e) {
-    return { intent: "unknown", query: text.trim(), error: String(e?.message || e) };
+    return { actions: [{ intent: "unknown", query: text.trim() }], error: String(e?.message || e) };
   }
 }
 
