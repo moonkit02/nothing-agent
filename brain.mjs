@@ -20,7 +20,7 @@ const TOKEN = process.env.BRAIN_TOKEN || ""; // shared secret the phone must sen
 delete process.env.ANTHROPIC_API_KEY;
 delete process.env.ANTHROPIC_AUTH_TOKEN;
 
-const INTENTS = ["play_music", "navigate", "unknown"];
+const INTENTS = ["play_music", "navigate", "media", "volume", "unknown"];
 
 const SYSTEM =
   "You turn a Malaysian rojak voice command (mixed Mandarin, English and Malay, " +
@@ -29,11 +29,16 @@ const SYSTEM =
   'Reply with ONLY compact JSON: {"actions":[{"intent": <one of ' + JSON.stringify(INTENTS) +
   '>, "query": <the cleaned target>}, ...]}. Use "unknown" if nothing fits. Clean the ' +
   "query into its standard form (the real song, artist or place name), not the raw " +
-  'speech. Going home is always the query "home". Examples: "nothing帮我开下周杰伦的搁浅" -> ' +
+  'speech. Going home is always the query "home". ' +
+  'For "media" the query is exactly one of "pause", "play", "next", "previous". ' +
+  'For "volume" the query is a signed step count like "-2" or "+2"; "小声一点"/"大声一点" ' +
+  'without a number means 2 steps. Examples: "nothing帮我开下周杰伦的搁浅" -> ' +
   '{"actions":[{"intent":"play_music","query":"搁浅 周杰伦"}]}; ' +
   '"nothing去map search下回家的路" -> {"actions":[{"intent":"navigate","query":"home"}]}; ' +
   '"nothing go KLCC then play some Jay Chou" -> {"actions":[{"intent":"navigate","query":"KLCC"},' +
-  '{"intent":"play_music","query":"周杰伦"}]}.';
+  '{"intent":"play_music","query":"周杰伦"}]}; "eh nothing小声一点" -> ' +
+  '{"actions":[{"intent":"volume","query":"-2"}]}; "nothing next song lah" -> ' +
+  '{"actions":[{"intent":"media","query":"next"}]}.';
 
 function coerce(out, text) {
   // Model output is untrusted. Keep only valid {intent, query} items, else one unknown.

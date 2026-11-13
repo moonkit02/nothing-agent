@@ -3,6 +3,8 @@
 # Usage: act.sh <adb-serial> <intent> <query>
 #   play_music  search YT Music, tap the top result's Play (song) or Shuffle play (artist), then bring back the app that was in front
 #   navigate    start Waze turn-by-turn to <query> ("home" = Waze saved Home)
+#   media       pause | play | next | previous
+#   volume      signed steps, e.g. -2 or +2 (max 15)
 set -euo pipefail
 serial=$1; intent=$2; query=$3
 adb_cmd=(adb -s "$serial")
@@ -60,8 +62,30 @@ navigate() {
   echo "navigating: $query"
 }
 
+media() {
+  # Send straight to the active media session: "input keyevent" goes to the front window
+  # and never reached YT Music (tested). No tapping, so Waze stays in front.
+  case $query in
+    pause|play|next|previous) phone cmd media_session dispatch "$query" ;;
+    *) echo "bad media query: $query" >&2; exit 2 ;;
+  esac
+  echo "media: $query"
+}
+
+volume() {
+  # query is untrusted model output: accept only a signed small number.
+  [[ $query =~ ^[+-]?[0-9]{1,2}$ ]] || { echo "bad volume query: $query" >&2; exit 2; }
+  local n=$((10#${query#[+-]})) key=VOLUME_UP
+  [[ $query == -* ]] && key=VOLUME_DOWN
+  (( n > 15 )) && n=15
+  for _ in $(seq 1 "$n"); do phone input keyevent "KEYCODE_$key"; done
+  echo "volume: $query"
+}
+
 case $intent in
   play_music) play_music ;;
   navigate) navigate ;;
+  media) media ;;
+  volume) volume ;;
   *) echo "unsupported intent: $intent" >&2; exit 2 ;;
 esac
