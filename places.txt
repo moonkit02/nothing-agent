@@ -1,0 +1,12 @@
+# Saved places for commands like "nothing 带我去 save 过的 鬆記雞飯".
+#
+# One place per line:   name = where
+#   where = lat,lng          exact spot (Google Maps: long-press the place, copy the numbers)
+#   where = any other text   searched in Waze, top result is used
+#
+# The brain matches what you say to these names (simplified/traditional, English, nicknames),
+# so write the name the way you think of the place. Edits apply on the next command, no restart.
+# "home" is not listed here: it always uses the Home saved in Waze.
+#
+# Example:
+# 鬆記雞飯 = 3.1730,101.6640

@@ -7,6 +7,14 @@
 #   volume      signed steps, e.g. -2 or +2 (max 15)
 set -euo pipefail
 serial=$1; intent=$2; query=$3
+
+# Safe stop: no action may run longer than this. The hard kill switch is on the phone:
+# turning off Wireless debugging cuts adb, so nothing here can touch the phone.
+MAX_SECONDS=45
+( sleep "$MAX_SECONDS"; echo "act.sh: over ${MAX_SECONDS}s, killed" >&2; kill -TERM $$ 2>/dev/null ) &
+watchdog=$!
+# Kill the watchdog's sleep too, or it lives on and later signals a reused PID.
+trap 'pkill -P $watchdog 2>/dev/null; kill $watchdog 2>/dev/null' EXIT
 adb_cmd=(adb -s "$serial")
 YT=com.google.android.apps.youtube.music
 WAZE=com.waze
@@ -54,12 +62,22 @@ play_music() {
   echo "playing: $query (restored: ${prev:-none})"
 }
 
+saved_place() {
+  # Exact name match in places.txt ("name = where"), comments skipped.
+  awk -v k="$1" -F'[[:space:]]*=[[:space:]]*' '!/^[[:space:]]*#/ && $1 == k { print $2; exit }' \
+    "$(dirname "$0")/places.txt" 2>/dev/null
+}
+
 navigate() {
-  # "home" uses the Home saved in Waze; anything else is a Waze search.
-  local target="q=$(encode "$query")"
-  [ "$query" = home ] && target="favorite=home"
+  # "home" = Home saved in Waze; a places.txt name = its coordinates or search text; else a Waze search.
+  local where target
+  where=$(saved_place "$query")
+  if [ "$query" = home ]; then target="favorite=home"
+  elif [[ $where =~ ^-?[0-9]+(\.[0-9]+)?,[[:space:]]*-?[0-9]+(\.[0-9]+)?$ ]]; then target="ll=${where//[[:space:]]/}"
+  else target="q=$(encode "${where:-$query}")"
+  fi
   phone am start -a android.intent.action.VIEW -p "$WAZE" -d "'https://waze.com/ul?$target&navigate=yes'" >/dev/null
-  echo "navigating: $query"
+  echo "navigating: $query ($target)"
 }
 
 media() {

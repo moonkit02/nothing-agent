@@ -10,6 +10,7 @@
 // gets a valid answer.
 
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const PORT = 8080;
@@ -21,6 +22,7 @@ delete process.env.ANTHROPIC_API_KEY;
 delete process.env.ANTHROPIC_AUTH_TOKEN;
 
 const INTENTS = ["play_music", "navigate", "media", "volume", "unknown"];
+const MAX_ACTIONS = 5;
 
 const SYSTEM =
   "You turn a Malaysian rojak voice command (mixed Mandarin, English and Malay, " +
@@ -40,11 +42,29 @@ const SYSTEM =
   '{"actions":[{"intent":"volume","query":"-2"}]}; "nothing next song lah" -> ' +
   '{"actions":[{"intent":"media","query":"next"}]}.';
 
+function saved_names() {
+  // Read per request so edits to places.txt apply without a restart.
+  try {
+    return readFileSync(new URL("./places.txt", import.meta.url), "utf8").split("\n")
+      .filter((l) => l.trim() && !l.trim().startsWith("#") && l.includes("="))
+      .map((l) => l.split("=")[0].trim());
+  } catch { return []; }
+}
+
+function system_prompt() {
+  const names = saved_names();
+  return names.length
+    ? SYSTEM + " The user's saved places are " + JSON.stringify(names) + ". If a navigate " +
+      "target means one of them (any script, language or nickname), the query must be that exact name."
+    : SYSTEM;
+}
+
 function coerce(out, text) {
   // Model output is untrusted. Keep only valid {intent, query} items, else one unknown.
   const actions = (Array.isArray(out?.actions) ? out.actions : [])
     .filter((a) => a && INTENTS.includes(a.intent) && typeof a.query === "string")
-    .map((a) => ({ intent: a.intent, query: a.query }));
+    .map((a) => ({ intent: a.intent, query: a.query }))
+    .slice(0, MAX_ACTIONS); // safe stop: a runaway reply cannot queue a long chain of phone actions
   return { actions: actions.length ? actions : [{ intent: "unknown", query: text.trim() }] };
 }
 
@@ -53,7 +73,7 @@ async function parse(text) {
     const q = query({
       prompt: text,
       options: {
-        systemPrompt: SYSTEM,
+        systemPrompt: system_prompt(),
         allowedTools: [],   // locked: the brain cannot run bash or touch files
         maxTurns: 1,
         model: MODEL,
