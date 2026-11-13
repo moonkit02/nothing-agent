@@ -10,7 +10,7 @@
 // gets a valid answer.
 
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const PORT = 8080;
@@ -90,20 +90,60 @@ async function parse(text) {
   }
 }
 
-const server = createServer((req, res) => {
-  if (req.method !== "POST" || req.url !== "/parse") { res.writeHead(404); res.end(); return; }
-  if (TOKEN && req.headers["x-token"] !== TOKEN) { res.writeHead(401); res.end("bad token"); return; }
-  let body = "";
-  req.on("data", (c) => (body += c));
-  req.on("end", async () => {
-    let text;
-    try { text = JSON.parse(body).text; } catch { res.writeHead(400); res.end('expected {"text": "..."}'); return; }
-    if (typeof text !== "string") { res.writeHead(400); res.end('expected {"text": "..."}'); return; }
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(await parse(text)));
+// Config files the phone page may read and write. Nothing else on disk is reachable.
+const EDITABLE = ["places.txt"];
+const MAX_BODY = 64 * 1024;
+const here = (name) => new URL("./" + name, import.meta.url);
+
+function read_body(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (c) => {
+      body += c;
+      if (body.length > MAX_BODY) { req.destroy(); reject(new Error("body too large")); }
+    });
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
   });
+}
+
+const server = createServer(async (req, res) => {
+  const url = new URL(req.url, "http://local");
+  const send = (code, body, type = "text/plain; charset=utf-8") => {
+    res.writeHead(code, { "content-type": type }); res.end(body);
+  };
+  // The page itself holds no data; everything below needs the token.
+  if (req.method === "GET" && url.pathname === "/") return send(200, readFileSync(here("editor.html")), "text/html; charset=utf-8");
+  if (TOKEN && req.headers["x-token"] !== TOKEN) return send(401, "bad token");
+  try {
+    if (req.method === "POST" && url.pathname === "/parse") {
+      const text = JSON.parse(await read_body(req)).text;
+      if (typeof text !== "string") return send(400, 'expected {"text": "..."}');
+      return send(200, JSON.stringify(await parse(text)), "application/json");
+    }
+    if (req.method === "GET" && url.pathname === "/files") return send(200, JSON.stringify(EDITABLE), "application/json");
+    if (url.pathname === "/file") {
+      const name = url.searchParams.get("name");
+      if (!EDITABLE.includes(name)) return send(404, "not editable");
+      if (req.method === "GET") return send(200, existsSync(here(name)) ? readFileSync(here(name)) : "");
+      if (req.method === "PUT") {
+        const body = await read_body(req);
+        if (existsSync(here(name))) copyFileSync(here(name), here(name + ".bak")); // one-step undo
+        writeFileSync(here(name), body);
+        return send(200, "saved");
+      }
+    }
+    send(404, "");
+  } catch (e) {
+    send(400, String(e?.message || e));
+  }
 });
 
-// 127.0.0.1 only; a tunnel forwards here. Keep BRAIN_TOKEN set so the public URL is guarded.
-server.listen(PORT, "127.0.0.1", () =>
-  console.log(`brain (subscription) on 127.0.0.1:${PORT}  model=${MODEL}  token=${TOKEN ? "on" : "OFF (set BRAIN_TOKEN!)"}`));
+// Default 127.0.0.1. To reach it from the phone set BRAIN_HOST (LAN or Tailscale IP); never without a token.
+const HOST = process.env.BRAIN_HOST || "127.0.0.1";
+if (HOST !== "127.0.0.1" && !TOKEN) {
+  console.error(`refusing to listen on ${HOST} without BRAIN_TOKEN`);
+  process.exit(1);
+}
+server.listen(PORT, HOST, () =>
+  console.log(`brain (subscription) on ${HOST}:${PORT}  model=${MODEL}  token=${TOKEN ? "on" : "OFF (set BRAIN_TOKEN!)"}`));

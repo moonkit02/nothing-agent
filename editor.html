@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111111">
+<title>nothing-agent config</title>
+<style>
+  :root { --bg: #f6f6f4; --fg: #141414; --muted: #6b6b6b; --line: #d9d9d4; --card: #ffffff; --accent: #d71921; --ok: #1f7a3a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0e0e0e; --fg: #ededed; --muted: #9a9a9a; --line: #2a2a2a; --card: #171717; --accent: #ff3b42; --ok: #4cc06d; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; } /* else the flex rules below would show hidden parts */
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans SC", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 16px 16px 8px; display: flex; align-items: baseline; gap: 10px; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+  h1 span { color: var(--accent); }
+  #dirty { font-size: 13px; color: var(--accent); visibility: hidden; }
+  main { flex: 1; display: flex; flex-direction: column; padding: 0 16px; gap: 10px; min-height: 0; }
+  select, input, textarea, button { font: inherit; color: var(--fg); }
+  select, input { width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  textarea { flex: 1; min-height: 240px; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--card); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 15px; line-height: 1.5;
+    resize: none; white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; } /* wrap: phone is narrow */
+  .hint { font-size: 13px; color: var(--muted); margin: 0; }
+  footer { position: sticky; bottom: 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    background: var(--bg); border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: center; }
+  button { padding: 14px 18px; border: 0; border-radius: 12px; font-weight: 600; cursor: pointer; }
+  #save { flex: 1; background: var(--accent); color: #fff; }
+  #save:disabled { opacity: .45; }
+  #reload { background: var(--card); border: 1px solid var(--line); }
+  #status { font-size: 14px; min-height: 1.4em; padding: 0 16px; color: var(--muted); }
+  #status.ok { color: var(--ok); } #status.err { color: var(--accent); }
+  #login { display: none; padding: 0 16px; gap: 10px; flex-direction: column; }
+</style>
+</head>
+<body>
+<header><h1><span>●</span> nothing-agent</h1><span id="dirty">unsaved</span></header>
+
+<section id="login">
+  <p class="hint">Enter the BRAIN_TOKEN set on the PC. It stays on this phone only.</p>
+  <input id="token" type="password" autocomplete="off" placeholder="BRAIN_TOKEN">
+  <button id="go" style="background:var(--accent);color:#fff">Unlock</button>
+</section>
+
+<main id="app" hidden>
+  <select id="file" aria-label="Config file"></select>
+  <textarea id="text" spellcheck="false" autocapitalize="off" autocorrect="off" aria-label="File contents"></textarea>
+  <p class="hint">places.txt: one per line, <code>name = lat,lng</code> or <code>name = Waze search text</code>. Lines starting with # are notes.</p>
+</main>
+<div id="status" role="status"></div>
+<footer id="bar" hidden><button id="reload">Reload</button><button id="save" disabled>Save</button></footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let token = "", loaded = "";
+try { token = localStorage.getItem("brain_token") || ""; } catch {}
+
+function status(msg, kind = "") { $("status").textContent = msg; $("status").className = kind; }
+function set_dirty() {
+  const dirty = $("text").value !== loaded;
+  $("dirty").style.visibility = dirty ? "visible" : "hidden";
+  $("save").disabled = !dirty;
+}
+
+async function call(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { "x-token": token, ...(opts.headers || {}) } });
+  if (res.status === 401) { show_login("Wrong token."); throw new Error("bad token"); }
+  if (!res.ok) throw new Error(await res.text() || res.status);
+  return res;
+}
+
+function show_login(msg) {
+  try { localStorage.removeItem("brain_token"); } catch {}
+  $("login").style.display = "flex"; $("app").hidden = true; $("bar").hidden = true;
+  status(msg || "", msg ? "err" : "");
+}
+
+async function load_file() {
+  status("Loading…");
+  loaded = await (await call("/file?name=" + encodeURIComponent($("file").value))).text();
+  $("text").value = loaded; set_dirty(); status("Loaded " + $("file").value);
+}
+
+async function start() {
+  try {
+    const files = await (await call("/files")).json();
+    $("file").innerHTML = files.map((f) => `<option>${f}</option>`).join("");
+    $("login").style.display = "none"; $("app").hidden = false; $("bar").hidden = false;
+    await load_file();
+  } catch (e) { if (String(e.message) !== "bad token") status("Cannot reach the brain: " + e.message, "err"); }
+}
+
+$("go").onclick = () => {
+  token = $("token").value.trim();
+  try { localStorage.setItem("brain_token", token); } catch {}
+  start();
+};
+$("text").addEventListener("input", set_dirty);
+$("file").onchange = () => {
+  if ($("text").value !== loaded && !confirm("Discard unsaved changes?")) return;
+  load_file();
+};
+$("reload").onclick = () => {
+  if ($("text").value !== loaded && !confirm("Discard unsaved changes?")) return;
+  load_file().catch((e) => status(e.message, "err"));
+};
+$("save").onclick = async () => {
+  $("save").disabled = true; status("Saving…");
+  try {
+    await call("/file?name=" + encodeURIComponent($("file").value), { method: "PUT", body: $("text").value });
+    loaded = $("text").value; set_dirty(); status("Saved. Next command uses it.", "ok");
+  } catch (e) { set_dirty(); status("Not saved: " + e.message, "err"); }
+};
+window.addEventListener("beforeunload", (e) => { if ($("text").value !== loaded) e.preventDefault(); });
+
+token ? start() : show_login();
+</script>
+</body>
+</html>
