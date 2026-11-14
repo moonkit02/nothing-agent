@@ -8,13 +8,20 @@
 set -euo pipefail
 serial=$1; intent=$2; query=$3
 
+# Git Bash on Windows: leave /sdcard/... alone for adb, but still convert /tmp/... for adb.exe/python.exe.
+case "$(uname -s)" in MINGW*|MSYS*) export MSYS2_ARG_CONV_EXCL="/sdcard" ;; esac
+
+# Kill switch (Pause button on the config page): while this file exists, touch nothing.
+[ -e "$(dirname "$0")/paused" ] && { echo "act.sh: paused, not touching the phone" >&2; exit 3; }
+
 # Safe stop: no action may run longer than this. The hard kill switch is on the phone:
 # turning off Wireless debugging cuts adb, so nothing here can touch the phone.
 MAX_SECONDS=45
 ( sleep "$MAX_SECONDS"; echo "act.sh: over ${MAX_SECONDS}s, killed" >&2; kill -TERM $$ 2>/dev/null ) &
 watchdog=$!
 # Kill the watchdog's sleep too, or it lives on and later signals a reused PID.
-trap 'pkill -P $watchdog 2>/dev/null; kill $watchdog 2>/dev/null' EXIT
+# "|| true": Git Bash has no pkill, and a failing trap would turn every success into exit 127.
+trap 'pkill -P $watchdog 2>/dev/null || true; kill $watchdog 2>/dev/null || true' EXIT
 adb_cmd=(adb -s "$serial")
 YT=com.google.android.apps.youtube.music
 WAZE=com.waze

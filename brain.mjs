@@ -10,7 +10,7 @@
 // gets a valid answer.
 
 import { createServer } from "node:http";
-import { readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, copyFileSync, existsSync, unlinkSync } from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const PORT = 8080;
@@ -94,6 +94,8 @@ async function parse(text) {
 const EDITABLE = ["places.txt"];
 const MAX_BODY = 64 * 1024;
 const here = (name) => new URL("./" + name, import.meta.url);
+// Kill switch: while this file exists, act.sh refuses to touch the phone.
+const PAUSE_FILE = here("paused");
 
 function read_body(req) {
   return new Promise((resolve, reject) => {
@@ -120,6 +122,13 @@ const server = createServer(async (req, res) => {
       const text = JSON.parse(await read_body(req)).text;
       if (typeof text !== "string") return send(400, 'expected {"text": "..."}');
       return send(200, JSON.stringify(await parse(text)), "application/json");
+    }
+    if (url.pathname === "/pause") {
+      if (req.method === "POST") {
+        if (JSON.parse(await read_body(req)).paused === true) writeFileSync(PAUSE_FILE, new Date().toISOString() + "\n");
+        else if (existsSync(PAUSE_FILE)) unlinkSync(PAUSE_FILE);
+      }
+      return send(200, JSON.stringify({ paused: existsSync(PAUSE_FILE) }), "application/json");
     }
     if (req.method === "GET" && url.pathname === "/files") return send(200, JSON.stringify(EDITABLE), "application/json");
     if (url.pathname === "/file") {

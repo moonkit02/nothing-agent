@@ -35,6 +35,9 @@
   #status { font-size: 14px; min-height: 1.4em; padding: 0 16px; color: var(--muted); }
   #status.ok { color: var(--ok); } #status.err { color: var(--accent); }
   #login { display: none; padding: 0 16px; gap: 10px; flex-direction: column; }
+  #pause { width: 100%; padding: 18px; font-size: 18px; background: var(--accent); color: #fff; }
+  #pause.on { background: var(--ok); }
+  #pause-hint { font-weight: 600; }
 </style>
 </head>
 <body>
@@ -47,6 +50,8 @@
 </section>
 
 <main id="app" hidden>
+  <button id="pause">…</button>
+  <p class="hint" id="pause-hint"></p>
   <select id="file" aria-label="Config file"></select>
   <textarea id="text" spellcheck="false" autocapitalize="off" autocorrect="off" aria-label="File contents"></textarea>
   <p class="hint">places.txt: one per line, <code>name = lat,lng</code> or <code>name = Waze search text</code>. Lines starting with # are notes.</p>
@@ -85,11 +90,20 @@ async function load_file() {
   $("text").value = loaded; set_dirty(); status("Loaded " + $("file").value);
 }
 
+function show_pause(paused) {
+  $("pause").textContent = paused ? "▶ Resume phone actions" : "⏸ Pause phone actions";
+  $("pause").classList.toggle("on", paused);
+  $("pause").dataset.paused = paused ? "1" : "";
+  $("pause-hint").textContent = paused ? "PAUSED: nothing will touch the phone." : "Running: commands can control the phone.";
+}
+async function load_pause() { show_pause((await (await call("/pause")).json()).paused); }
+
 async function start() {
   try {
     const files = await (await call("/files")).json();
     $("file").innerHTML = files.map((f) => `<option>${f}</option>`).join("");
     $("login").style.display = "none"; $("app").hidden = false; $("bar").hidden = false;
+    await load_pause();
     await load_file();
   } catch (e) { if (String(e.message) !== "bad token") status("Cannot reach the brain: " + e.message, "err"); }
 }
@@ -98,6 +112,16 @@ $("go").onclick = () => {
   token = $("token").value.trim();
   try { localStorage.setItem("brain_token", token); } catch {}
   start();
+};
+$("pause").onclick = async () => {
+  const want = !$("pause").dataset.paused;
+  $("pause").disabled = true;
+  try {
+    const res = await call("/pause", { method: "POST", body: JSON.stringify({ paused: want }) });
+    show_pause((await res.json()).paused);
+    status(want ? "Paused." : "Resumed.", "ok");
+  } catch (e) { status("Pause not changed: " + e.message, "err"); }
+  $("pause").disabled = false;
 };
 $("text").addEventListener("input", set_dirty);
 $("file").onchange = () => {
