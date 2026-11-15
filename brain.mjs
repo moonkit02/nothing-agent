@@ -9,7 +9,7 @@
 // Fail-soft: any error returns a safe {intent: unknown} so the phone always
 // gets a valid answer.
 
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { readFileSync, writeFileSync, copyFileSync, existsSync, unlinkSync } from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
@@ -26,7 +26,10 @@ const MAX_ACTIONS = 5;
 
 const SYSTEM =
   "You turn a Malaysian rojak voice command (mixed Mandarin, English and Malay, " +
-  "with local slang, often starting with the wake word 'nothing') into actions. " +
+  "with local slang, often starting with the wake word 'Apollo', which speech-to-text may also write " +
+  "as 'apollo', 'Apooos', '阿波罗', '啊菠萝', '阿波路' or similar: ignore it, it is not part of the command) " +
+  "into actions. The text comes from speech-to-text, so fix obvious mishearings (e.g. '半岛铁合' is the " +
+  "song '半岛铁盒'). " +
   "One command may hold several actions; keep them in the spoken order. " +
   'Reply with ONLY compact JSON: {"actions":[{"intent": <one of ' + JSON.stringify(INTENTS) +
   '>, "query": <the cleaned target>}, ...]}. Use "unknown" if nothing fits. Clean the ' +
@@ -34,12 +37,12 @@ const SYSTEM =
   'speech. Going home is always the query "home". ' +
   'For "media" the query is exactly one of "pause", "play", "next", "previous". ' +
   'For "volume" the query is a signed step count like "-2" or "+2"; "小声一点"/"大声一点" ' +
-  'without a number means 2 steps. Examples: "nothing帮我开下周杰伦的搁浅" -> ' +
+  'without a number means 2 steps. Examples: "Apollo帮我开下周杰伦的搁浅" -> ' +
   '{"actions":[{"intent":"play_music","query":"搁浅 周杰伦"}]}; ' +
-  '"nothing去map search下回家的路" -> {"actions":[{"intent":"navigate","query":"home"}]}; ' +
-  '"nothing go KLCC then play some Jay Chou" -> {"actions":[{"intent":"navigate","query":"KLCC"},' +
-  '{"intent":"play_music","query":"周杰伦"}]}; "eh nothing小声一点" -> ' +
-  '{"actions":[{"intent":"volume","query":"-2"}]}; "nothing next song lah" -> ' +
+  '"阿波罗去map search下回家的路" ->{"actions":[{"intent":"navigate","query":"home"}]}; ' +
+  '"Apollo go KLCC then play some Jay Chou" ->{"actions":[{"intent":"navigate","query":"KLCC"},' +
+  '{"intent":"play_music","query":"周杰伦"}]}; "eh apollo小声一点" -> ' +
+  '{"actions":[{"intent":"volume","query":"-2"}]}; "Apollo next song lah" -> ' +
   '{"actions":[{"intent":"media","query":"next"}]}.';
 
 function saved_names() {
@@ -122,6 +125,14 @@ const server = createServer(async (req, res) => {
       const text = JSON.parse(await read_body(req)).text;
       if (typeof text !== "string") return send(400, 'expected {"text": "..."}');
       return send(200, JSON.stringify(await parse(text)), "application/json");
+    }
+    if (req.method === "POST" && url.pathname === "/listen") {
+      // Phone mic audio -> listen.py (localhost only). The token check above still applies.
+      const up = request({ host: "127.0.0.1", port: 8081, path: "/listen", method: "POST",
+        headers: { "content-type": "application/octet-stream", "content-length": req.headers["content-length"] || 0 } },
+        (r) => { res.writeHead(r.statusCode, { "content-type": "application/json; charset=utf-8" }); r.pipe(res); });
+      up.on("error", (e) => send(502, "listen.py is not running: " + e.message));
+      return req.pipe(up);
     }
     if (url.pathname === "/pause") {
       if (req.method === "POST") {

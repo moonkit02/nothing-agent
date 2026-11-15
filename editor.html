@@ -38,6 +38,15 @@
   #pause { width: 100%; padding: 18px; font-size: 18px; background: var(--accent); color: #fff; }
   #pause.on { background: var(--ok); }
   #pause-hint { font-weight: 600; }
+  #listen { width: 100%; padding: 18px; font-size: 18px; background: var(--card); border: 1px solid var(--line); }
+  #listen.on { background: var(--fg); color: var(--bg); }
+  #meter { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+  #level { height: 100%; width: 0; background: var(--muted); transition: width .06s linear; }
+  #level.on { background: var(--ok); } /* green while an utterance is being captured */
+  #heard { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px;
+    max-height: 40vh; overflow: auto; font-size: 14px; }
+  #heard li { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  #heard .meta { color: var(--muted); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -52,6 +61,9 @@
 <main id="app" hidden>
   <button id="pause">…</button>
   <p class="hint" id="pause-hint"></p>
+  <button id="listen">🎙 Start listening</button>
+  <div id="meter" aria-hidden="true"><div id="level"></div></div>
+  <ul id="heard" aria-live="polite"></ul>
   <select id="file" aria-label="Config file"></select>
   <textarea id="text" spellcheck="false" autocapitalize="off" autocorrect="off" aria-label="File contents"></textarea>
   <p class="hint">places.txt: one per line, <code>name = lat,lng</code> or <code>name = Waze search text</code>. Lines starting with # are notes.</p>
@@ -122,6 +134,75 @@ $("pause").onclick = async () => {
     status(want ? "Paused." : "Resumed.", "ok");
   } catch (e) { status("Pause not changed: " + e.message, "err"); }
   $("pause").disabled = false;
+};
+// ---- Listen: mic -> simple voice-activity cut -> POST each utterance (16 kHz float32) to /listen ----
+let mic = null;
+
+function heard(main, meta) {
+  const li = document.createElement("li");
+  li.textContent = main;
+  const m = document.createElement("div"); m.className = "meta"; m.textContent = meta; li.append(m);
+  $("heard").prepend(li);
+  while ($("heard").children.length > 20) $("heard").lastChild.remove();
+}
+
+async function send_clip(frames) {
+  const pcm = new Float32Array(frames.reduce((n, f) => n + f.length, 0));
+  let at = 0; for (const f of frames) { pcm.set(f, at); at += f.length; }
+  try {
+    const r = await (await call("/listen", { method: "POST", body: pcm.buffer })).json();
+    const did = r.done ? " → " + r.done.join(" | ") : "";
+    heard(`"${r.text || "…"}"  ${r.result}${did}`,
+      `voice ${r.score} ${r.is_me ? "✓ you" : "✗ not you"} (${r.style}) · ${r.seconds}s audio · ${(r.ms / 1000).toFixed(1)}s`);
+  } catch (e) { heard("error: " + e.message, new Date().toLocaleTimeString()); }
+}
+
+async function start_listen() {
+  if (!window.isSecureContext) throw new Error("mic needs the https://…ts.net address");
+  const stream = await navigator.mediaDevices.getUserMedia(
+    // Keep echo cancellation (music playing), but no noise suppression / auto gain: they change the
+    // voice enough to lower the voiceprint score (live clips scored ~0.55 vs ~0.7 from the recorder).
+    { audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false } });
+  const ctx = new AudioContext({ sampleRate: 16000 });
+  const node = ctx.createScriptProcessor(1024, 1, 1);  // 64 ms frames
+  let noise = 0.003, talking = false, frames = [], pre = [], quiet = 0;
+  node.onaudioprocess = (e) => {
+    const x = new Float32Array(e.inputBuffer.getChannelData(0));
+    let s = 0; for (const v of x) s += v * v;
+    // 0.005 floor: without auto gain the mic is quiet, 0.015 missed normal speech.
+    const rms = Math.sqrt(s / x.length), loud = rms > Math.max(0.005, noise * 3);
+    $("level").style.width = Math.min(100, rms * 1500) + "%";
+    $("level").classList.toggle("on", talking);
+    if (!talking) {
+      noise = 0.95 * noise + 0.05 * rms;
+      pre.push(x); if (pre.length > 10) pre.shift();         // keep ~0.6 s before speech starts (the "A" of Apollo)
+      if (loud) { talking = true; frames = pre.slice(); quiet = 0; }
+    } else {
+      frames.push(x); quiet = loud ? 0 : quiet + 1;
+      if (quiet > 12 || frames.length > 220) {                // ~0.8 s of silence, or 14 s max
+        talking = false; pre = [];
+        if (frames.length - quiet > 8) send_clip(frames);     // ignore blips under ~0.5 s
+        frames = [];
+      }
+    }
+  };
+  ctx.createMediaStreamSource(stream).connect(node); node.connect(ctx.destination);
+  let lock = null; try { lock = await navigator.wakeLock.request("screen"); } catch {}
+  mic = { stream, ctx, lock };
+}
+
+function stop_listen() {
+  mic.stream.getTracks().forEach((t) => t.stop()); mic.ctx.close(); mic.lock?.release(); mic = null;
+  $("level").style.width = "0";
+}
+
+$("listen").onclick = async () => {
+  try {
+    if (mic) stop_listen(); else await start_listen();
+    status(mic ? "Listening. Say \"Apollo, …\"" : "Stopped listening.", "ok");
+  } catch (e) { status("Mic: " + e.message, "err"); }
+  $("listen").textContent = mic ? "⏹ Stop listening" : "🎙 Start listening";
+  $("listen").classList.toggle("on", !!mic);
 };
 $("text").addEventListener("input", set_dirty);
 $("file").onchange = () => {

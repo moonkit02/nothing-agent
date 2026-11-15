@@ -33,35 +33,18 @@ front_pkg() {
   phone dumpsys activity activities | grep -m1 topResumedActivity | grep -oE 'u0 [^/ ]+' | cut -d' ' -f2 || true
 }
 
-find_play_button() {
-  # Find the button by its label, not a fixed position: results layout changes per query.
-  local xml; xml=$(mktemp)
-  phone uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
-  "${adb_cmd[@]}" pull /sdcard/ui.xml "$xml" >/dev/null 2>&1 </dev/null
-  # Only trust the screen once the search box shows this query; else we may tap the previous search's results.
-  python3 -I -c '
-import sys, re, xml.etree.ElementTree as ET
-nodes = list(ET.parse(sys.argv[1]).iter("node"))
-if any((n.get("text") or "").strip().lower() == sys.argv[2].strip().lower() for n in nodes):
-    for n in nodes:
-        # Song top result shows "Play <title>"; artist top result shows "Shuffle play".
-        d = n.get("content-desc") or ""
-        if d.startswith("Play ") or d == "Shuffle play":
-            x1, y1, x2, y2 = map(int, re.findall(r"\d+", n.get("bounds")))
-            print((x1 + x2) // 2, (y1 + y2) // 2); break
-' "$xml" "$query" 2>/dev/null || true
-  rm -f "$xml"
-}
+# Top search result's button: "Play <song>" for a song, "Shuffle play" for an artist. Both sit at the
+# same spot, so one fixed tap covers both (measured 2026-11-14 on the Nothing Phone 3a, 1080x2392,
+# 5 queries). Much faster than reading the screen with uiautomator. Re-measure if YT Music changes layout.
+PLAY_X=307; PLAY_Y=675
+PLAY_WAIT=${PLAY_WAIT:-2}  # seconds for the results to load before tapping
 
 play_music() {
-  local prev xy
+  local prev
   prev=$(front_pkg)
   phone am start -a android.intent.action.VIEW -p "$YT" -d "'https://music.youtube.com/search?q=$(encode "$query")'" >/dev/null
-  for _ in $(seq 1 10); do
-    xy=$(find_play_button); [ -n "$xy" ] && break; sleep 1
-  done
-  [ -z "$xy" ] && { echo "no Play button found for: $query" >&2; exit 1; }
-  phone input tap $xy
+  sleep "$PLAY_WAIT"
+  phone input tap $PLAY_X $PLAY_Y
   # Give back the screen (e.g. navigation while driving).
   if [ -n "$prev" ] && [ "$prev" != "$YT" ]; then
     sleep 1; phone monkey -p "$prev" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
